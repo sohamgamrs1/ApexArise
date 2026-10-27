@@ -10,17 +10,36 @@ jobs:
         run: |
           ZIP=$(ls *.zip | head -n 1)
           echo "Found $ZIP"
-          unzip -o "$ZIP" -d extracted
-          PUB=$(find extracted -name "pubspec.yaml" | head -n 1)
+          rm -rf /tmp/backup
+          mkdir -p /tmp/backup
+          unzip -o "$ZIP" -d /tmp/extracted
+          PUB=$(find /tmp/extracted -name "pubspec.yaml" | head -n 1)
           DIR=$(dirname "$PUB")
-          echo "Project dir: $DIR"
-          cp -r $DIR/* . 2>/dev/null || true
-          cp -r $DIR/.* . 2>/dev/null || true
-          rm -rf extracted
-          ls -la
+          echo "Project in ZIP: $DIR"
+          cp -r $DIR/* /tmp/backup/ 2>/dev/null || true
+          cp -r $DIR/.* /tmp/backup/ 2>/dev/null || true
+          rm -rf /tmp/extracted
+          ls -la /tmp/backup/
 
-      - name: Auto-Fix pubspec.yaml
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.0'
+          channel: 'stable'
+
+      - name: Create fresh Android v2 embedding
         run: |
+          rm -rf android
+          flutter create . --project-name apexarise --org com.apexarise.system --platforms android --no-pub
+          ls -la android/app/src/main/kotlin/ || ls -la android/app/src/main/java/ || true
+
+      - name: Restore code + Auto-Fix pubspec
+        run: |
+          # Restore lib and assets
+          rm -rf lib assets
+          cp -r /tmp/backup/lib . 2>/dev/null || true
+          cp -r /tmp/backup/assets . 2>/dev/null || true
+          # Restore other Dart files if any
+          # Overwrite pubspec with fixed version
           cat > pubspec.yaml <<'EOF'
           name: apexarise
           description: ApexArise - Gamified Focus OS
@@ -50,13 +69,10 @@ jobs:
             assets:
               - assets/
           EOF
-          echo "Fixed pubspec.yaml:"
+          echo "Fixed pubspec:"
           cat pubspec.yaml
-
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.22.0'
-          channel: 'stable'
+          echo "Lib files:"
+          ls -la lib/
 
       - run: flutter pub get
       - run: flutter build apk --release --no-tree-shake-icons
