@@ -1,0 +1,31 @@
+name: Build APK from ZIP
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Unzip project
+        run: |
+          ls -la
+          ZIPFILE=$(ls ApexArise*.zip | head -n 1)
+          echo "Found $ZIPFILE"
+          unzip -o "$ZIPFILE" -d temp_extract
+          if [ -d "temp_extract/apexarise" ]; then mv temp_extract/apexarise/* .; elif [ -d "temp_extract" ]; then mv temp_extract/* . 2>/dev/null || true; fi
+          rm -rf temp_extract
+          rm -f *.zip
+          ls -la
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.0'
+          
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs || echo "skip build_runner"
+      - run: flutter build apk --release
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: ApexArise-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
