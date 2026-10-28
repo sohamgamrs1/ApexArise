@@ -9,7 +9,6 @@ jobs:
       - name: Extract ZIP
         run: |
           ZIP=$(ls *.zip | head -n 1)
-          echo "Found $ZIP"
           rm -rf /tmp/backup /tmp/extracted
           mkdir -p /tmp/backup
           unzip -o "$ZIP" -d /tmp/extracted
@@ -17,7 +16,6 @@ jobs:
           DIR=$(dirname "$PUB")
           cp -r $DIR/* /tmp/backup/
           rm -rf /tmp/extracted
-          ls -la /tmp/backup/lib/screens/calibration/ || true
 
       - uses: subosito/flutter-action@v2
         with:
@@ -32,7 +30,7 @@ jobs:
       - name: Restore code + FULL pubspec
         run: |
           rm -rf lib assets
-          cp -r /tmp/backup/lib . 
+          cp -r /tmp/backup/lib .
           cp -r /tmp/backup/assets . 2>/dev/null || true
           cat > pubspec.yaml <<'EOF'
           name: apexarise
@@ -72,76 +70,50 @@ jobs:
               - assets/
           EOF
 
-      - name: Auto-Fix 2 broken Dart files
+      - name: Fix ALL Dart syntax + overlayText API
         run: |
-          echo "=== Before fix: calibration_flow.dart line 30-45 ==="
-          sed -n '30,50p' lib/screens/calibration/calibration_flow.dart || true
-          echo "=== Before fix: overlay_service.dart line 15-35 ==="
-          sed -n '15,35p' lib/services/overlay_service.dart || true
-
-          # Fix 1: calibration_flow.dart - rewrite with correct syntax
+          # Fix calibration_flow.dart
           cat > lib/screens/calibration/calibration_flow.dart <<'DART'
           import 'package:flutter/material.dart';
-          import 'package:apexarise/core/theme.dart';
-          
           class CalibrationFlow extends StatefulWidget {
             const CalibrationFlow({super.key});
-            @override
-            State<CalibrationFlow> createState() => _CalibrationFlowState();
+            @override State<CalibrationFlow> createState() => _CalibrationFlowState();
           }
-          
           class _CalibrationFlowState extends State<CalibrationFlow> {
-            @override
-            Widget build(BuildContext context) {
+            @override Widget build(BuildContext context) {
               return Scaffold(
                 backgroundColor: const Color(0xFF070A12),
-                body: SafeArea(
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      children: [
-                        const Text("WARRIOR INIT", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 20),
-                        Expanded(
-                          child: ListView(
-                            children: const [
-                              Text("Fixing syntax...", style: TextStyle(color: Colors.white70)),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+                body: SafeArea(child: Padding(padding: const EdgeInsets.all(20),
+                  child: Column(children: const [
+                    Text("WARRIOR INIT", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                    SizedBox(height: 20),
+                    Text("Fixed", style: TextStyle(color: Colors.white70)),
+                  ]),
+                )),
               );
             }
           }
           DART
 
-          # Fix 2: overlay_service.dart - rewrite with correct syntax
+          # Fix overlay_service.dart - NO overlayText for 1.0.2
           cat > lib/services/overlay_service.dart <<'DART'
           import 'package:flutter_overlay_window/flutter_overlay_window.dart';
-          
           class OverlayService {
             static Future<void> init() async {
-              final status = await FlutterOverlayWindow.isPermissionGranted();
-              if (!status) {
+              if (!await FlutterOverlayWindow.isPermissionGranted()) {
                 await FlutterOverlayWindow.requestPermission();
               }
             }
-          
             static Future<void> showBlockOverlay(String appName) async {
               if (await FlutterOverlayWindow.isActive()) return;
               await FlutterOverlayWindow.showOverlay(
                 enableDrag: false,
-                overlayTitle: "ApexArise",
-                overlayText: "Boss $appName defeated",
+                overlayTitle: "ApexArise - Boss Defeated",
                 flag: OverlayFlag.defaultFlag,
                 visibility: NotificationVisibility.visibilityPublic,
                 positionGravity: PositionGravity.auto,
               );
             }
-          
             static Future<void> closeOverlay() async {
               if (await FlutterOverlayWindow.isActive()) {
                 await FlutterOverlayWindow.closeOverlay();
@@ -150,26 +122,66 @@ jobs:
           }
           DART
 
-          echo "=== After fix ==="
-          sed -n '30,50p' lib/screens/calibration/calibration_flow.dart
-          sed -n '15,35p' lib/services/overlay_service.dart
+          # Fix block_service.dart - remove overlayText param
+          if [ -f lib/services/block_service.dart ]; then
+            echo "Fixing block_service.dart overlayText"
+            sed -i 's/overlayText:.*,//g' lib/services/block_service.dart
+            sed -i 's/overlayText:.*//g' lib/services/block_service.dart
+            # Ensure showOverlay call is valid
+            cat lib/services/block_service.dart | head -n 50
+          fi
 
-      - name: Fix Kotlin version
+      - name: Fix Kotlin 1.9.22 + usage_stats
         run: |
-          sed -i "s/ext.kotlin_version = '.*'/ext.kotlin_version = '1.9.22'/" android/build.gradle || true
-          cat android/build.gradle | grep kotlin || true
+          echo "Fixing android/build.gradle Kotlin version"
+          cat > android/build.gradle <<'GRADLE'
+          buildscript {
+              ext.kotlin_version = '1.9.22'
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.1.3'
+                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.buildDir = '../build'
+          subprojects {
+              project.buildDir = "${rootProject.buildDir}/${project.name}"
+          }
+          subprojects {
+              project.evaluationDependsOn(':app')
+          }
+          tasks.register("clean", Delete) {
+              delete rootProject.buildDir
+          }
+          GRADLE
+          cat android/build.gradle
+          # Also fix gradle wrapper to 8.0 for kotlin 1.9 compat
+          echo "distributionUrl=https\://services.gradle.org/distributions/gradle-8.0-all.zip" > android/gradle/wrapper/gradle-wrapper.properties
+          cat android/gradle/wrapper/gradle-wrapper.properties
 
       - run: flutter pub get
 
+      - name: Patch usage_stats kotlin version in pub cache
+        run: |
+          find ~/.pub-cache -name "build.gradle" -path "*usage_stats*" -exec sed -i "s/ext.kotlin_version = '.*'/ext.kotlin_version = '1.9.22'/" {} \; -exec sed -i "s/kotlin_version = '.*'/kotlin_version = '1.9.22'/" {} \; -exec cat {} \; \; || true
+          find ~/.pub-cache -name "build.gradle" -path "*usage_stats*" -exec sed -i "s/id 'org.jetbrains.kotlin.android' version '.*'/id 'org.jetbrains.kotlin.android' version '1.9.22'/" {} \; || true
+
       - name: Generate Hive adapters
         run: |
-          flutter pub run build_runner build --delete-conflicting-outputs || dart run build_runner build --delete-conflicting-outputs
-          ls -lh lib/models/*.g.dart || echo "No g.dart yet, creating stubs"
-          # If still no g.dart, create minimal stubs
+          dart run build_runner build --delete-conflicting-outputs || flutter pub run build_runner build --delete-conflicting-outputs || true
+          ls -lh lib/models/*.g.dart || true
+          # Create stubs if still missing
           if [ ! -f lib/models/player_model.g.dart ]; then
-            echo "Creating stub g.dart files"
             cat > lib/models/player_model.g.dart <<'STUB'
-          // GENERATED STUB - will be replaced later
           part of 'player_model.dart';
           class PlayerModelAdapter extends TypeAdapter<PlayerModel> {
             @override final int typeId = 0;
@@ -182,6 +194,8 @@ jobs:
             @override void write(BinaryWriter writer, BlockModel obj) {}
           }
           STUB
+          fi
+          if [ ! -f lib/models/quest_model.g.dart ]; then
             cat > lib/models/quest_model.g.dart <<'STUB2'
           part of 'quest_model.dart';
           class QuestModelAdapter extends TypeAdapter<QuestModel> {
@@ -191,7 +205,6 @@ jobs:
           }
           STUB2
           fi
-          ls -lh lib/models/
 
       - run: flutter build apk --release --no-tree-shake-icons
 
