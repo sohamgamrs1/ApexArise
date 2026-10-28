@@ -70,9 +70,8 @@ jobs:
               - assets/
           EOF
 
-      - name: Fix ALL Dart files - overlayText + hunterName
+      - name: Fix Dart files
         run: |
-          # Fix calibration_flow.dart with hunterName param
           cat > lib/screens/calibration/calibration_flow.dart <<'DART'
           import 'package:flutter/material.dart';
           class CalibrationFlow extends StatefulWidget {
@@ -89,22 +88,17 @@ jobs:
                     Text("WARRIOR INIT", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
                     SizedBox(height: 12),
                     Text("Hunter: ${widget.hunterName ?? 'Unknown'}", style: TextStyle(color: Colors.white70)),
-                    SizedBox(height: 20),
-                    Expanded(child: ListView(children: const [Text("Fixed", style: TextStyle(color: Colors.white70))]))
                   ]),
                 )),
               );
             }
           }
           DART
-
           cat > lib/services/overlay_service.dart <<'DART'
           import 'package:flutter_overlay_window/flutter_overlay_window.dart';
           class OverlayService {
             static Future<void> init() async {
-              if (!await FlutterOverlayWindow.isPermissionGranted()) {
-                await FlutterOverlayWindow.requestPermission();
-              }
+              if (!await FlutterOverlayWindow.isPermissionGranted()) { await FlutterOverlayWindow.requestPermission(); }
             }
             static Future<void> showBlockOverlay(String appName) async {
               if (await FlutterOverlayWindow.isActive()) return;
@@ -117,91 +111,66 @@ jobs:
               );
             }
             static Future<void> closeOverlay() async {
-              if (await FlutterOverlayWindow.isActive()) {
-                await FlutterOverlayWindow.closeOverlay();
-              }
+              if (await FlutterOverlayWindow.isActive()) { await FlutterOverlayWindow.closeOverlay(); }
             }
           }
           DART
+          sed -i 's/overlayText:.*,//g' lib/services/block_service.dart || true
+          sed -i 's/overlayText:.*//g' lib/services/block_service.dart || true
 
-          if [ -f lib/services/block_service.dart ]; then
-            sed -i 's/overlayText:.*,//g' lib/services/block_service.dart
-            sed -i 's/overlayText:.*//g' lib/services/block_service.dart
-          fi
-          echo "Fixed files"
-
-      - name: Fix Kotlin 1.9.22 in ALL places
+      - name: Fix Kotlin 1.9.22 + minSdk 22 - FINAL FIX
         run: |
-          echo "=== Before fix settings.gradle ==="
-          cat android/settings.gradle | head -n 30
-          echo "=== Before fix build.gradle ==="
-          cat android/build.gradle | head -n 20
-
-          # Fix settings.gradle - update kotlin version to 1.9.22
-          sed -i "s/org.jetbrains.kotlin.android.*version.*'.*'/org.jetbrains.kotlin.android' version '1.9.22' apply false/" android/settings.gradle
-          sed -i 's/org.jetbrains.kotlin.android.*version.*".*"/org.jetbrains.kotlin.android" version "1.9.22" apply false/' android/settings.gradle
-          # If not found, append
-          if ! grep -q "1.9.22" android/settings.gradle; then
-            echo "Patching settings.gradle manually"
-            cat android/settings.gradle
-          fi
-
-          # Fix build.gradle
+          # Fix build.gradle kotlin
           cat > android/build.gradle <<'GRADLE'
           buildscript {
               ext.kotlin_version = '1.9.22'
-              repositories {
-                  google()
-                  mavenCentral()
-              }
+              repositories { google(); mavenCentral() }
               dependencies {
                   classpath 'com.android.tools.build:gradle:8.1.3'
                   classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
               }
           }
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
+          allprojects { repositories { google(); mavenCentral() } }
           rootProject.buildDir = '../build'
           subprojects {
               project.buildDir = "${rootProject.buildDir}/${project.name}"
-          }
-          subprojects {
-              project.evaluationDependsOn(':app')
               tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-                  kotlinOptions {
-                      freeCompilerArgs += "-Xskip-metadata-version-check"
-                  }
+                  kotlinOptions { freeCompilerArgs += "-Xskip-metadata-version-check" }
               }
           }
-          tasks.register("clean", Delete) {
-              delete rootProject.buildDir
-          }
+          tasks.register("clean", Delete) { delete rootProject.buildDir }
           GRADLE
 
-          echo "=== After fix ==="
-          cat android/settings.gradle | grep -n kotlin || cat android/settings.gradle
-          cat android/build.gradle | grep -n kotlin
+          # Fix settings.gradle kotlin version
+          sed -i "s/org.jetbrains.kotlin.android.*version.*'.*'/org.jetbrains.kotlin.android' version '1.9.22' apply false/" android/settings.gradle
+          sed -i 's/org.jetbrains.kotlin.android.*version.*".*"/org.jetbrains.kotlin.android" version "1.9.22" apply false/' android/settings.gradle || true
 
-          # Fix gradle wrapper
+          # FIX minSdkVersion 21 -> 22 (THIS IS THE LAST ERROR)
+          echo "Fixing minSdkVersion to 22"
+          sed -i "s/minSdkVersion flutter.minSdkVersion/minSdkVersion 22/" android/app/build.gradle
+          sed -i "s/minSdk flutter.minSdkVersion/minSdk 22/" android/app/build.gradle
+          sed -i "s/minSdkVersion 21/minSdkVersion 22/" android/app/build.gradle
+          sed -i "s/minSdk 21/minSdk 22/" android/app/build.gradle
+
+          # Also set in local.properties
+          echo "flutter.minSdkVersion=22" >> android/local.properties
+          echo "flutter.targetSdkVersion=34" >> android/local.properties
+
+          echo "=== android/app/build.gradle minSdk check ==="
+          cat android/app/build.gradle | grep -n -A2 -B2 minSdk || cat android/app/build.gradle | grep -n min
+          cat android/local.properties
+
+          # Gradle wrapper
           echo "distributionUrl=https\://services.gradle.org/distributions/gradle-8.0-all.zip" > android/gradle/wrapper/gradle-wrapper.properties
 
       - run: flutter pub get
 
-      - name: Patch usage_stats plugin kotlin version
+      - name: Patch usage_stats plugin
         run: |
           PUBCACHE=~/.pub-cache/hosted/pub.dev/usage_stats-1.3.1
           if [ -d "$PUBCACHE" ]; then
-            echo "Patching $PUBCACHE/android/build.gradle"
-            cat $PUBCACHE/android/build.gradle | head -n 20
             sed -i "s/ext.kotlin_version = '.*'/ext.kotlin_version = '1.9.22'/" $PUBCACHE/android/build.gradle || true
-            sed -i "s/kotlin_version = '.*'/kotlin_version = '1.9.22'/" $PUBCACHE/android/build.gradle || true
-            echo "ext.kotlin_version = '1.9.22'" >> $PUBCACHE/android/build.gradle
-            # Force kotlin 1.9.22 in dependencies
-            cat $PUBCACHE/android/build.gradle
+            echo "Patched usage_stats"
           fi
 
       - name: Generate Hive adapters
